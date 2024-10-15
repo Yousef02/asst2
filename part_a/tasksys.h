@@ -3,6 +3,13 @@
 
 #include "itasksys.h"
 
+typedef struct {
+  int start;
+  int thread_tasks;
+  int total_tasks;
+  IRunnable* runnable;
+} WorkerArgs;
+
 /*
  * TaskSystemSerial: This class is the student's implementation of a
  * serial task execution engine.  See definition of ITaskSystem in
@@ -34,6 +41,9 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+        static void runWrapper(WorkerArgs *const args);
+    private:
+        int num_threads;
 };
 
 /*

@@ -1,4 +1,6 @@
 #include "tasksys.h"
+#include <thread>
+#include <functional>
 
 
 IRunnable::~IRunnable() {}
@@ -55,22 +57,46 @@ TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    this->num_threads = num_threads;
 }
 
 TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
+void TaskSystemParallelSpawn::runWrapper(WorkerArgs *const args) {
+    for (int i = args->start; i < args->start + args->thread_tasks; i++) {
+        args->runnable->runTask(i, args->total_tasks);
+    }
+}
+
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
 
 
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Part A.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
+    // The WorkerArgs array is used to pass inputs to and return output from
+    std::thread workers[num_threads];
+    WorkerArgs args[num_threads];
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    for (int i=0; i<num_threads; i++) {
+        args[i].start = (num_total_tasks / num_threads) * i;
+        args[i].thread_tasks = (num_total_tasks / num_threads);
+        args[i].total_tasks = num_total_tasks;
+        args[i].runnable = runnable;
     }
+
+    for (int i=1; i<num_threads; i++) {
+        workers[i] = std::thread(runWrapper, &args[i]);
+    }
+
+    TaskSystemParallelSpawn::runWrapper(&args[0]);
+
+    // Join worker threads.
+    for (int i=1; i<num_threads; i++) {
+      workers[i].join();
+    }
+
+
+    // for (int i = 0; i < num_total_tasks; i++) {
+    //    runnable->runTask(i, num_total_tasks);
+    // }
 }
 
 TaskID TaskSystemParallelSpawn::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
@@ -117,6 +143,7 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     for (int i = 0; i < num_total_tasks; i++) {
         runnable->runTask(i, num_total_tasks);
     }
+
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
