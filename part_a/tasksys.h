@@ -2,12 +2,13 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <mutex>
 
 typedef struct {
-  int start;
-  int thread_tasks;
-  int total_tasks;
-  IRunnable* runnable;
+  int num_total_tasks;
+  IRunnable *runnable;
+  std::mutex *tasks_l;
+  int *task_idx;
 } WorkerArgs;
 
 /*
@@ -41,9 +42,12 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
-        static void runWrapper(WorkerArgs *const args);
     private:
         int num_threads;
+        int num_total_tasks;
+        int task_idx;
+        std::mutex tasks_l;
+
 };
 
 /*
