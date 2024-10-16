@@ -58,7 +58,7 @@ TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     std::thread workers[num_threads];
-    this->task_idx = 0;
+    task_idx = 0;
 
     for (int i=0; i<num_threads; i++) {
         workers[i] = std::thread([this, runnable, num_total_tasks]() {
