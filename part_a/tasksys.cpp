@@ -107,29 +107,60 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
 }
 
 TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
-    //
-    // TODO: CS149 student implementations may decide to perform setup
-    // operations (such as thread pool construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
-}
+    this->workers.reserve(num_threads);
+    this->num_threads = num_threads;
+    this->num_total_tasks = 0;
+    this->in_progress = 0;
+    this->task_id = 0;
+    this->spin = true;
 
-TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
+    for (int i=0; i<num_threads; i++) {
+        workers.emplace_back([this]() {
+            while (spin) {
+                int id = -1;
 
-void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
+                tasks_l.lock();
+                if (task_id < num_total_tasks) {
+                    id = task_id++;
+                    in_progress++;
+                } 
+                tasks_l.unlock();
 
-
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Part A.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
-
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+                if (id != -1) {
+                    runnable->runTask(id, num_total_tasks);
+                    tasks_l.lock();
+                    in_progress--;
+                    tasks_l.unlock();
+                }
+            }
+        });
     }
 
+}
+
+TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {  
+    this->spin = false;
+    for (int i=0; i<num_threads; i++) {
+      workers[i].join();
+    }
+}
+
+void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
+    this->tasks_l.lock();
+    this->num_total_tasks = num_total_tasks;
+    this->task_id = 0;
+    this->runnable = runnable;
+    this->tasks_l.unlock();
+
+    // Only return when all tasks are done.
+    while (spin) {
+        this->tasks_l.lock();
+        if ((this->task_id == this->num_total_tasks) && (this->in_progress == 0)) {
+            this->tasks_l.unlock();
+            return;
+        }
+        this->tasks_l.unlock();
+    }
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

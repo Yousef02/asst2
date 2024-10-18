@@ -3,6 +3,7 @@
 
 #include "itasksys.h"
 #include <mutex>
+#include <thread>
 
 typedef struct {
   int num_total_tasks;
@@ -65,6 +66,15 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+    private:
+        std::vector<std::thread> workers;
+        IRunnable *runnable;
+        std::mutex tasks_l;
+        int num_total_tasks;
+        int num_threads;
+        int task_id;
+        int in_progress;
+        bool spin;
 };
 
 /*
