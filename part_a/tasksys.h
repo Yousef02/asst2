@@ -4,13 +4,7 @@
 #include "itasksys.h"
 #include <mutex>
 #include <thread>
-
-typedef struct {
-  int num_total_tasks;
-  IRunnable *runnable;
-  std::mutex *tasks_l;
-  int *task_idx;
-} WorkerArgs;
+#include <condition_variable>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -45,7 +39,6 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         void sync();
     private:
         int num_threads;
-        int num_total_tasks;
         int task_idx;
         std::mutex tasks_l;
 
@@ -92,6 +85,16 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+    private:
+        std::vector<std::thread> workers;
+        IRunnable *runnable;
+        std::mutex tasks_l;
+        int num_total_tasks;
+        int num_threads;
+        int task_id;
+        int in_progress;
+        std::condition_variable cv;
+        bool running;
 };
 
 #endif
