@@ -144,7 +144,9 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {  
     // Join worker threads.
+    tasks_l.lock();
     this->spin = false;
+    tasks_l.unlock();
     for (int i=0; i<num_threads; i++) {
         workers[i].join();
     }
@@ -229,7 +231,9 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Join worker threads.
+    tasks_l.lock();
     this->running = false;
+    tasks_l.unlock();
     tasks_cv.notify_all();
     for (int i=0; i<num_threads; i++) {
         workers[i].join();
