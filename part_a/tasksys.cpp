@@ -50,12 +50,6 @@ const char* TaskSystemParallelSpawn::name() {
     return "Parallel + Always Spawn";
 }
 
-TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
-    this->num_threads = num_threads - 1;  // Will use main thread as worker thread.
-}
-
-TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
-
 void TaskSystemParallelSpawn::doTasks() {
     tasks_l.lock();
     while (task_id < num_total_tasks) {
@@ -67,12 +61,19 @@ void TaskSystemParallelSpawn::doTasks() {
     tasks_l.unlock();
 }
 
+TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
+    this->num_threads = num_threads - 1;  // Will use main thread as worker thread.
+}
+
+TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
+
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     std::thread workers[num_threads];
     this->num_total_tasks = num_total_tasks;
     this->task_id = 0;
     this->runnable = runnable;
 
+    // Spawn worker threads.
     for (int i=0; i<num_threads; i++) {
         workers[i] = std::thread([this]() {
             TaskSystemParallelSpawn::doTasks();
@@ -109,28 +110,34 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
 
-TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
-    this->num_threads = num_threads;
+void TaskSystemParallelThreadPoolSpinning::doTasks() {
+    tasks_l.lock();
+    while (task_id < num_total_tasks) {
+        int id = task_id++;
+        in_progress++;
+        tasks_l.unlock();
+        runnable->runTask(id, num_total_tasks);
+        tasks_l.lock();
+        in_progress--;
+    }
+    tasks_l.unlock();
+}
 
-    for (int i=0; i<num_threads; i++) {
+TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
+    this->num_threads = num_threads - 1;  // Will use main thread as worker thread.
+
+    // Spawn worker threads.
+    for (int i=0; i<this->num_threads; i++) {
         workers.emplace_back([this]() {
             while (spin) {
-                tasks_l.lock();
-                while (task_id < num_total_tasks) {
-                    int id = task_id++;
-                    in_progress++;
-                    tasks_l.unlock();
-                    runnable->runTask(id, num_total_tasks);
-                    tasks_l.lock();
-                    in_progress--;
-                }
-                tasks_l.unlock();
+                TaskSystemParallelThreadPoolSpinning::doTasks();
             }
         });
     }
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {  
+    // Join worker threads.
     this->spin = false;
     for (int i=0; i<num_threads; i++) {
       workers[i].join();
@@ -138,17 +145,22 @@ TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
-    this->tasks_l.lock();
+    tasks_l.lock();
     this->num_total_tasks = num_total_tasks;
     this->task_id = 0;
     this->runnable = runnable;
+    tasks_l.unlock();
+
+    // Use main thread as worker.
+    TaskSystemParallelThreadPoolSpinning::doTasks();
 
     // Spin until all tasks are done.
-    while ((this->task_id < this->num_total_tasks) || (this->in_progress > 0)) {
-        this->tasks_l.unlock();
-        this->tasks_l.lock();
+    tasks_l.lock();
+    while (in_progress > 0) {
+        tasks_l.unlock();
+        tasks_l.lock();
     }
-    this->tasks_l.unlock();
+    tasks_l.unlock();
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
