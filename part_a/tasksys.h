@@ -65,13 +65,13 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         void sync();
     private:
         std::vector<std::thread> workers;
-        IRunnable *runnable;
-        std::mutex tasks_l;
-        int num_total_tasks = 0;
         int num_threads;
+        int num_total_tasks = 0;
         int task_id = 0;
         int in_progress = 0;
         bool spin = true;
+        IRunnable *runnable;
+        std::mutex tasks_l;
 };
 
 /*
@@ -85,6 +85,7 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();
         const char* name();
+        void doTasks();
         void run(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
