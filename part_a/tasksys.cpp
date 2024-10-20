@@ -51,27 +51,36 @@ const char* TaskSystemParallelSpawn::name() {
 }
 
 TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
-    this->num_threads = num_threads;
+    this->num_threads = num_threads - 1;  // Will use main thread as worker thread.
 }
 
 TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
+void TaskSystemParallelSpawn::doTasks() {
+    tasks_l.lock();
+    while (task_id < num_total_tasks) {
+        int idx = task_id++;
+        tasks_l.unlock();
+        runnable->runTask(idx, num_total_tasks);
+        tasks_l.lock();
+    }
+    tasks_l.unlock();
+}
+
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     std::thread workers[num_threads];
-    task_idx = 0;
+    this->num_total_tasks = num_total_tasks;
+    this->task_id = 0;
+    this->runnable = runnable;
 
     for (int i=0; i<num_threads; i++) {
-        workers[i] = std::thread([this, runnable, num_total_tasks]() {
-            tasks_l.lock();
-            while (task_idx < num_total_tasks) {
-                int idx = task_idx++;
-                tasks_l.unlock();
-                runnable->runTask(idx, num_total_tasks);
-                tasks_l.lock();
-            }
-            tasks_l.unlock();
+        workers[i] = std::thread([this]() {
+            TaskSystemParallelSpawn::doTasks();
         });
     }
+
+    // Use main thread as worker.
+    TaskSystemParallelSpawn::doTasks();
 
     // Join worker threads.
     for (int i=0; i<num_threads; i++) {
