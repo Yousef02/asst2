@@ -98,8 +98,9 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         int num_threads;
         int task_id = 0;
         int in_progress = 0;
-        std::condition_variable cv;
+        std::condition_variable tasks_cv;
         bool running = true;
+        std::condition_variable done;
 };
 
 #endif

@@ -85,7 +85,7 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
 
     // Join worker threads.
     for (int i=0; i<num_threads; i++) {
-      workers[i].join();
+        workers[i].join();
     }
 }
 
@@ -140,7 +140,7 @@ TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
     // Join worker threads.
     this->spin = false;
     for (int i=0; i<num_threads; i++) {
-      workers[i].join();
+        workers[i].join();
     }
 }
 
@@ -186,6 +186,7 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
 
 /* 
  * This function ASSUMES that caller owns class lock (tasks_l).
+ * Caller will still own lock when doTasks() returns.
 */
 void TaskSystemParallelThreadPoolSleeping::doTasks() {
     while (task_id < num_total_tasks) {
@@ -196,9 +197,9 @@ void TaskSystemParallelThreadPoolSleeping::doTasks() {
         tasks_l.lock();
         in_progress--;
 
-        if (in_progress == 0 && task_id == num_total_tasks) {
+        if ((in_progress == 0) && (task_id == num_total_tasks)) {
             // All tasks done, notify main thread.
-            cv.notify_all();
+            done.notify_one();
         }
     }
 }
@@ -210,9 +211,9 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
         workers.emplace_back([this]() {
             std::unique_lock<std::mutex> lk(tasks_l);
             while (running) {
-                // Wait for tasks to come in.
-                while (task_id == num_total_tasks && running) {
-                    cv.wait(lk);
+                // Sleep until tasks to come in.
+                while ((task_id == num_total_tasks) && running) {
+                    tasks_cv.wait(lk);
                 }
 
                 // Do tasks.
@@ -225,9 +226,9 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Join worker threads.
     this->running = false;
-    cv.notify_all();
+    tasks_cv.notify_all();
     for (int i=0; i<num_threads; i++) {
-      workers[i].join();
+        workers[i].join();
     }
 }
 
@@ -238,14 +239,14 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     this->runnable = runnable;
     
     // Notify worker threads of tasks to be done.
-    cv.notify_all();
+    tasks_cv.notify_all();
 
     // Use main thread as worker.
     TaskSystemParallelThreadPoolSleeping::doTasks();
 
     // Sleep until all tasks are done.
     while (in_progress > 0) {
-        cv.wait(lk);
+        done.wait(lk);
     }
 }
 
