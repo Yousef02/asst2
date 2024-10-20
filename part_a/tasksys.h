@@ -63,11 +63,11 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         std::vector<std::thread> workers;
         IRunnable *runnable;
         std::mutex tasks_l;
-        int num_total_tasks;
+        int num_total_tasks = 0;
         int num_threads;
-        int task_id;
-        int in_progress;
-        bool spin;
+        int task_id = 0;
+        int in_progress = 0;
+        bool spin = true;
 };
 
 /*
@@ -89,12 +89,12 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::vector<std::thread> workers;
         IRunnable *runnable;
         std::mutex tasks_l;
-        int num_total_tasks;
+        int num_total_tasks = 0;
         int num_threads;
-        int task_id;
-        int in_progress;
+        int task_id = 0;
+        int in_progress = 0;
         std::condition_variable cv;
-        bool running;
+        bool running = true;
 };
 
 #endif
