@@ -110,8 +110,11 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
 
+/* 
+ * This function ASSUMES that caller owns class lock (tasks_l).
+ * Caller will still own lock when doTasks() returns.
+ */
 void TaskSystemParallelThreadPoolSpinning::doTasks() {
-    tasks_l.lock();
     while (task_id < num_total_tasks) {
         int id = task_id++;
         in_progress++;
@@ -120,7 +123,6 @@ void TaskSystemParallelThreadPoolSpinning::doTasks() {
         tasks_l.lock();
         in_progress--;
     }
-    tasks_l.unlock();
 }
 
 TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
@@ -129,9 +131,13 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // Spawn worker threads.
     for (int i=0; i<this->num_threads; i++) {
         workers.emplace_back([this]() {
+            tasks_l.lock();
             while (spin) {
+                tasks_l.unlock();
+                tasks_l.lock();
                 TaskSystemParallelThreadPoolSpinning::doTasks();
             }
+            tasks_l.unlock();
         });
     }
 }
@@ -149,13 +155,11 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     this->num_total_tasks = num_total_tasks;
     this->task_id = 0;
     this->runnable = runnable;
-    tasks_l.unlock();
 
     // Use main thread as worker.
     TaskSystemParallelThreadPoolSpinning::doTasks();
 
     // Spin until all tasks are done.
-    tasks_l.lock();
     while (in_progress > 0) {
         tasks_l.unlock();
         tasks_l.lock();
@@ -187,7 +191,7 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
 /* 
  * This function ASSUMES that caller owns class lock (tasks_l).
  * Caller will still own lock when doTasks() returns.
-*/
+ */
 void TaskSystemParallelThreadPoolSleeping::doTasks() {
     while (task_id < num_total_tasks) {
         int id = task_id++;
