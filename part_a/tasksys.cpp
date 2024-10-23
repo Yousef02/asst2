@@ -195,9 +195,10 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 
     for (int i = 0; i < num_threads; i++) {
         workers.emplace_back([this]() {
-            while (true) {
+	  std::unique_lock<std::mutex> lock(tasks_l);
+	    while (true) {
                 int id = -1;
-                std::unique_lock<std::mutex> lock(tasks_l);
+                //std::unique_lock<std::mutex> lock(tasks_l);
 
                 // Wait for tasks or termination signal
                 cv.wait(lock, [this] {
@@ -214,19 +215,22 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
                     id = task_id++;
                     in_progress++;
                 }
-                lock.unlock();
+                //lock.unlock();
 
                 // Process the task outside the critical section
                 if (id != -1) {
+		    lock.unlock();
                     runnable->runTask(id, num_total_tasks);
 
                     // Update the task completion state
                     lock.lock();
                     in_progress--;
                     if (in_progress == 0 && task_id >= num_total_tasks) {
-                        cv.notify_all();
+		      lock.unlock();
+		      cv.notify_all();
+		      lock.lock();
                     }
-                    lock.unlock();
+                    
                 }
             }
         });
