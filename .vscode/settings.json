@@ -52,6 +52,10 @@
         "streambuf": "cpp",
         "string_view": "cpp",
         "system_error": "cpp",
-        "typeinfo": "cpp"
+        "typeinfo": "cpp",
+        "cinttypes": "cpp",
+        "deque": "cpp",
+        "set": "cpp",
+        "numeric": "cpp"
     }
 }

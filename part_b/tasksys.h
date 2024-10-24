@@ -1,6 +1,16 @@
 #ifndef _TASKSYS_H
 #define _TASKSYS_H
 
+#include <vector>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <iostream>
+#include <atomic>
+#include <chrono>
+#include <set>
+#include <deque>
+#include <atomic>
 #include "itasksys.h"
 
 /*
@@ -68,6 +78,53 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+
+    private:
+        std::vector<std::thread> workers;
+        std::mutex tasks_l;
+        std::condition_variable cv;
+        int num_threads;
+        int num_total_tasks;
+        int in_progress;
+        int task_id;
+        bool done;
+        IRunnable* runnable;
+        bool spin;
+
+        int task_id_for_async = 0;
+
+        // int bulk_in_progress = 0;
+        std::atomic<int> bulk_in_progress;
+
+        struct task_batch_toolbox {
+            TaskID task_id;
+            IRunnable* runnable;
+            int num_total_tasks;
+            int in_progress;
+            std::vector<TaskID> deps;
+        };
+
+        // need two queues to store tasks; one for tasks that are ready to run
+        // and one for tasks that are waiting for dependencies
+
+        // task_id -> task
+        
+        // std::vector<task_batch_toolbox> ready_tasks;
+        std::deque<task_batch_toolbox> ready_tasks;
+
+        // std::vector<task_batch_toolbox> waiting_tasks;
+        std::deque<task_batch_toolbox> waiting_tasks;
+
+        std::set<TaskID> done_set;
+
+        // test case idea: throw an error if ready is done but waiting is not
+
+        // run is going to be just runAsync with no deps followed by a call to sync
+
+        // sync is basically a cv waiting on ready_list to be empty, then it migrates waiting_list to ready_list, then waits again on
+        // ready_list being empty, then returns.
+
+        // the populating of this->whatever variables is going to happen in the worker threads, and through the struct I made
 };
 
 #endif
