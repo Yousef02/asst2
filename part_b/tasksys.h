@@ -91,7 +91,9 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         IRunnable* runnable;
         bool spin;
 
-        int task_id_for_async = 0;
+        std::mutex dbg_l;
+
+        std::atomic<int> task_id_for_async;
 
         // int bulk_in_progress = 0;
         std::atomic<int> bulk_in_progress;
@@ -116,6 +118,16 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::deque<task_batch_toolbox> waiting_tasks;
 
         std::set<TaskID> done_set;
+
+        // need another cv to wait on ready_tasks being empty
+        std::condition_variable ready_cv;
+
+        // need a lock for the ready_tasks and waiting_tasks
+        std::mutex lists_l;
+
+        std::mutex bulk_worker_mutex;
+
+        bool bulk_worker_active = false;
 
         // test case idea: throw an error if ready is done but waiting is not
 
