@@ -146,85 +146,67 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
                 });
             }
 
-
             while (true) {
+                bool move_on = false;
+                
+
                 // Ensure only one thread enters the bulk processing section
                 {
                     std::lock_guard<std::mutex> bulk_lock(bulk_worker_mutex);
                     if (bulk_in_progress == 0 && !bulk_worker_active) {
                         bulk_worker_active = true;  // Mark that a thread is handling the bulk work
                     } else {
-                        continue;  // If another thread is working on it, skip the loop
+                        move_on = true;
                     }
                 }
+                // std::cout << "HIIIIII" << std::endl;
 
-
-                while (bulk_in_progress == 0) {                    
-                    std::cout << "Bulk in progress" << std::endl;
+                while (bulk_in_progress == 0 && !move_on) {
+                    bulk_in_progress++;
+                    
+                    // std::cout << "bulk_in_progress == 0" << std::endl;
+                    std::unique_lock<std::mutex> lists_lock(lists_l);  // Ensure proper locking
                     while (ready_tasks.empty() && waiting_tasks.empty()) {
-                        std::cout << "both are empty" << std::endl;
-                        std::unique_lock<std::mutex> lock(lists_l);
-                        cv.wait(lock, [this] {
+                        cv.wait(lists_lock, [this] {
                             return !ready_tasks.empty() || !waiting_tasks.empty() || done;
                         });
                         if (done) {
                             return;
                         }
                     }
+
                     if (ready_tasks.empty() && !waiting_tasks.empty()) {
-                        std::cout << "Migrating waiting to ready" << std::endl;
-                        std::unique_lock<std::mutex> lock(lists_l);
                         task_batch_toolbox item = waiting_tasks.front();
                         waiting_tasks.pop_front();
-                       
                         ready_tasks.push_back(item);
                     }
 
-                    std::cout << "getting ready task" << std::endl;
+                    // dbg_l.lock();
                     task_batch_toolbox item = ready_tasks.front();
                     ready_tasks.pop_front();
+                    // std::cout << " processing batch " << item.task_id << std::endl;
+                    // dbg_l.unlock();
 
                     {
                         std::unique_lock<std::mutex> lock(tasks_l);
                         this->num_total_tasks = item.num_total_tasks;
                         this->task_id = 0;
-                        this->runnable = runnable;
+                        this->runnable = item.runnable;  // Ensure runnable is assigned from item
                         this->done = false;
                         this->in_progress = 0;
+                        this->task_id_for_bulk = item.task_id;
                     }
-                    std::cout << "Running task " << item.task_id << std::endl;
+
                     
-
-                    // Wait for all tasks to finish
-                    // std::unique_lock<std::mutex> lock(tasks_l);
-                    // while (task_id < num_total_tasks || in_progress > 0) {
-                    //     cv.wait(lock); // Wait for tasks to be completed
-                    // 
-                    bulk_in_progress++;
-                    ready_cv.notify_all(); // Wake up all threads to start processing tasks
-                    std::cout << "Bulk in progress count: " << bulk_in_progress << std::endl;
                 }
-
-
-                // Once bulk work is complete, allow other threads to enter
+                
                 {
                     std::lock_guard<std::mutex> bulk_lock(bulk_worker_mutex);
-                    bulk_worker_active = false;  // Mark that no thread is working on bulk processing anymore
+                    bulk_worker_active = false;  // Allow other threads to process after bulk work
                 }
-                // lists_l.unlock();
-            // }
 
-
-
-            // while (true) {
-
-
-                
                 int id = -1;
-                
                 std::unique_lock<std::mutex> lock(tasks_l);
-
-                
 
                 // Wait for tasks or termination signal
                 cv.wait(lock, [this] {
@@ -233,7 +215,6 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 
                 // Exit thread if we're done
                 if (done && task_id >= num_total_tasks) {
-                    // if (ready_tasks.e
                     return;
                 }
 
@@ -246,18 +227,23 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 
                 // Process the task outside the critical section
                 if (id != -1) {
-                    std::cout << "Running runTask " << num_total_tasks << std::endl;
+                    // std::cout << "Thread " << std::this_thread::get_id() << " processing task " << id << std::endl;
                     runnable->runTask(id, num_total_tasks);
 
-                    // Update the task completion state
                     lock.lock();
                     in_progress--;
                     if (in_progress == 0 && task_id >= num_total_tasks) {
+                        
                         bulk_in_progress--;
+                        // done_set.insert(task_id_for_bulk);
                         cv.notify_all();
                         ready_cv.notify_all();
-
                     }
+                    // dbg_l.lock();
+                    // std::cout << "in_progress: " << in_progress << std::endl;
+                    // std::cout << "task_id: " << this->task_id << std::endl;
+                    // std::cout << "num_total_tasks: " << num_total_tasks << std::endl;
+                    // dbg_l.unlock();
                     lock.unlock();
                 }
             }
@@ -266,13 +252,18 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    std::unique_lock<std::mutex> lock(tasks_l);
-    std::cout << "Destroying" << std::endl;
-    // done = true;
-    sync();
+    
+    
+    bulk_worker_mutex.lock();
     done = true;
-    lock.unlock();
+    std::cout << "Calling sync one last time" << std::endl;
+    // sync();
+    bulk_worker_mutex.unlock();
     cv.notify_all();
+
+    ready_cv.notify_all();
+
+
     for (int i = 0; i < num_threads; i++) {
         workers[i].join();
     }
@@ -281,75 +272,46 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
     runAsyncWithDeps(runnable, num_total_tasks, {});
     sync();
-    return;
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
-                                                    const std::vector<TaskID>& deps) {
-
-    // 1 - check if deps are empty or satisfied, then just put on ready queue
+                                                              const std::vector<TaskID>& deps) {
     task_id_for_async++;
-    bool deps_satisfied = false;
-    for (long unsigned int i = 0; i < deps.size(); i++) {
-        if (done_set.find(deps[i]) == done_set.end()) {
+    bool deps_satisfied = true;  // Default to true if no dependencies
+
+    for (const TaskID& dep : deps) {
+        if (done_set.find(dep) == done_set.end()) {
             deps_satisfied = false;
             break;
         }
-        deps_satisfied = true;
     }
 
-    
     if (deps.empty() || deps_satisfied) {
         task_batch_toolbox toPush = {task_id_for_async, runnable, num_total_tasks, 0};
         bool notify = ready_tasks.empty();
-        std::cout << "Pushing to ready" << std::endl;
-        std::cout << "Task ID: " << task_id_for_async << std::endl;
+
         ready_tasks.push_back(toPush);
-        if (notify){
-            std::cout << "Notifying" << std::endl;
-            // print size of ready_tasks
+        if (notify) {
             ready_cv.notify_all();
         }
-        
-        // run(runnable, num_total_tasks); maybe no because it should return immediately.
+
         return task_id_for_async;
     }
+
     task_batch_toolbox to_add = {task_id_for_async, runnable, num_total_tasks, 0, deps};
     waiting_tasks.push_back(to_add);
-    bulk_worker_mutex.unlock();
+    cv.notify_all();
     return task_id_for_async;
 }
 
 void TaskSystemParallelThreadPoolSleeping::sync() {
-
-    // if (!ready_tasks.empty()) {
-    //     for (int i = 0; i < ready_tasks.size(); i++) {
-    //         task_batch_toolbox item = ready_tasks[i];
-    //         run(item.runnable, item.num_total_tasks);
-    //         done_set.insert(item.task_id);
-    //     }
-    //     ready_tasks.clear();
-    // }
-
-    // if (!waiting_tasks.empty()) {
-    //     for (int i = 0; i < waiting_tasks.size(); i++) {
-    //         task_batch_toolbox item = waiting_tasks[i];
-    //         run(item.runnable, item.num_total_tasks);
-
-    //     }
-    // }
-
-
-    // when sync is called, all tasks called by runAsyncWithDeps should be run and waithed for to be finished
-
-    // wait for ready list to be empty -> migrate waiting list to ready list -> wait for ready list to be empty -> return
-
-    std::cout << "Syncing" << std::endl;
-
-    std::unique_lock<std::mutex> lock(tasks_l);
+    std::cout << "syncing" << std::endl;
+    std::unique_lock<std::mutex> lock(lists_l);
     while (!ready_tasks.empty()) {
         ready_cv.wait(lock);
     }
+
+std::cout << "sync done" << std::endl;
 
     while (!waiting_tasks.empty()) {
         task_batch_toolbox item = waiting_tasks.front();
@@ -362,6 +324,6 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     }
 
     lock.unlock();
-    std::cout << "Synced" << std::endl;
-    return;
+    
 }
+

@@ -129,6 +129,8 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
 
         bool bulk_worker_active = false;
 
+        TaskID task_id_for_bulk = 0;
+
         // test case idea: throw an error if ready is done but waiting is not
 
         // run is going to be just runAsync with no deps followed by a call to sync
