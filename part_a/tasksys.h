@@ -4,15 +4,7 @@
 #include "itasksys.h"
 #include <mutex>
 #include <thread>
-#include <vector>
 #include <condition_variable>
-
-typedef struct {
-  int num_total_tasks;
-  IRunnable *runnable;
-  std::mutex *tasks_l;
-  int *task_idx;
-} WorkerArgs;
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -41,16 +33,17 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         TaskSystemParallelSpawn(int num_threads);
         ~TaskSystemParallelSpawn();
         const char* name();
+        void doTasks();
         void run(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
     private:
         int num_threads;
-        int num_total_tasks;
-        int task_idx;
+        int task_id;
         std::mutex tasks_l;
-
+        IRunnable *runnable;
+        int num_total_tasks;
 };
 
 /*
@@ -64,19 +57,20 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         TaskSystemParallelThreadPoolSpinning(int num_threads);
         ~TaskSystemParallelThreadPoolSpinning();
         const char* name();
+        void doTasks();
         void run(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
     private:
         std::vector<std::thread> workers;
+        int num_threads;
+        int num_total_tasks = 0;
+        int task_id = 0;
+        int in_progress = 0;
+        bool spin = true;
         IRunnable *runnable;
         std::mutex tasks_l;
-        int num_total_tasks;
-        int num_threads;
-        int task_id;
-        int in_progress;
-        bool spin;
 };
 
 /*
@@ -99,16 +93,13 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::vector<std::thread> workers;
         IRunnable *runnable;
         std::mutex tasks_l;
-        // std::unique_lock<std::mutex> tasks_l;
         int num_total_tasks;
         int num_threads;
         int task_id;
         int in_progress;
-        bool spin;
         std::condition_variable cv;
         bool done;
-
-        std::mutex dbg_l;
 };
 
 #endif
+

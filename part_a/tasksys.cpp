@@ -1,7 +1,6 @@
 #include "tasksys.h"
 #include <thread>
 #include <functional>
-#include <iostream>
 
 
 IRunnable::~IRunnable() {}
@@ -51,38 +50,42 @@ const char* TaskSystemParallelSpawn::name() {
     return "Parallel + Always Spawn";
 }
 
+void TaskSystemParallelSpawn::doTasks() {
+    tasks_l.lock();
+    while (task_id < num_total_tasks) {
+        int idx = task_id++;
+        tasks_l.unlock();
+        runnable->runTask(idx, num_total_tasks);
+        tasks_l.lock();
+    }
+    tasks_l.unlock();
+}
+
 TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
-    this->num_threads = num_threads;
+    this->num_threads = num_threads - 1;  // Will use main thread as worker thread.
 }
 
 TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     std::thread workers[num_threads];
-    task_idx = 0;
+    this->num_total_tasks = num_total_tasks;
+    this->task_id = 0;
+    this->runnable = runnable;
 
+    // Spawn worker threads.
     for (int i=0; i<num_threads; i++) {
-        workers[i] = std::thread([this, runnable, num_total_tasks]() {
-            while (true) {
-                int idx = -1;
-                tasks_l.lock();
-                if (task_idx < num_total_tasks) {
-                    idx = task_idx;
-                    task_idx++;
-                } 
-                tasks_l.unlock();
-                if (idx != -1) {
-                    runnable->runTask(idx, num_total_tasks);
-                } else {
-                    return;
-                }
-            }
+        workers[i] = std::thread([this]() {
+            TaskSystemParallelSpawn::doTasks();
         });
     }
 
+    // Use main thread as worker.
+    TaskSystemParallelSpawn::doTasks();
+
     // Join worker threads.
     for (int i=0; i<num_threads; i++) {
-      workers[i].join();
+        workers[i].join();
     }
 }
 
@@ -107,61 +110,63 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
 
+/* 
+ * This function ASSUMES that caller owns class lock (tasks_l).
+ * Caller will still own lock when doTasks() returns.
+ */
+void TaskSystemParallelThreadPoolSpinning::doTasks() {
+    while (task_id < num_total_tasks) {
+        int id = task_id++;
+        in_progress++;
+        tasks_l.unlock();
+        runnable->runTask(id, num_total_tasks);
+        tasks_l.lock();
+        in_progress--;
+    }
+}
+
 TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
-    this->workers.reserve(num_threads);
-    this->num_threads = num_threads;
-    this->num_total_tasks = 0;
-    this->in_progress = 0;
-    this->task_id = 0;
-    this->spin = true;
+    this->num_threads = num_threads - 1;  // Will use main thread as worker thread.
 
-    for (int i=0; i<num_threads; i++) {
+    // Spawn worker threads.
+    for (int i=0; i<this->num_threads; i++) {
         workers.emplace_back([this]() {
+            tasks_l.lock();
             while (spin) {
-                int id = -1;
-
-                tasks_l.lock();
-                if (task_id < num_total_tasks) {
-                    id = task_id++;
-                    in_progress++;
-                } 
                 tasks_l.unlock();
-
-                if (id != -1) {
-                    runnable->runTask(id, num_total_tasks);
-                    tasks_l.lock();
-                    in_progress--;
-                    tasks_l.unlock();
-                }
+                tasks_l.lock();
+                TaskSystemParallelThreadPoolSpinning::doTasks();
             }
+            tasks_l.unlock();
         });
     }
-
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {  
+    // Join worker threads.
+    tasks_l.lock();
     this->spin = false;
+    tasks_l.unlock();
     for (int i=0; i<num_threads; i++) {
-      workers[i].join();
+        workers[i].join();
     }
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
-    this->tasks_l.lock();
+    tasks_l.lock();
     this->num_total_tasks = num_total_tasks;
     this->task_id = 0;
     this->runnable = runnable;
-    this->tasks_l.unlock();
 
-    // Only return when all tasks are done.
-    while (spin) {
-        this->tasks_l.lock();
-        if ((this->task_id == this->num_total_tasks) && (this->in_progress == 0)) {
-            this->tasks_l.unlock();
-            return;
-        }
-        this->tasks_l.unlock();
+    // Use main thread as worker.
+    TaskSystemParallelThreadPoolSpinning::doTasks();
+
+    // Spin until all tasks are done.
+    while (in_progress > 0) {
+        tasks_l.unlock();
+        tasks_l.lock();
     }
+    tasks_l.unlock();
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
@@ -195,10 +200,9 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 
     for (int i = 0; i < num_threads; i++) {
         workers.emplace_back([this]() {
-	  std::unique_lock<std::mutex> lock(tasks_l);
+	    std::unique_lock<std::mutex> lock(tasks_l);
 	    while (true) {
                 int id = -1;
-                //std::unique_lock<std::mutex> lock(tasks_l);
 
                 // Wait for tasks or termination signal
                 cv.wait(lock, [this] {
@@ -215,20 +219,19 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
                     id = task_id++;
                     in_progress++;
                 }
-                //lock.unlock();
 
                 // Process the task outside the critical section
                 if (id != -1) {
-		    lock.unlock();
+		            lock.unlock();
                     runnable->runTask(id, num_total_tasks);
 
                     // Update the task completion state
                     lock.lock();
                     in_progress--;
                     if (in_progress == 0 && task_id >= num_total_tasks) {
-		      lock.unlock();
-		      cv.notify_all();
-		      lock.lock();
+                        lock.unlock();
+                        cv.notify_all();
+                        lock.lock();
                     }
                     
                 }
@@ -264,7 +267,6 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
         cv.wait(lock); // Wait for tasks to be completed
     }
 
-    // std::cout << "All tasks completed!" << std::endl;
 }
 
 
@@ -287,3 +289,4 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
 
     return;
 }
+
