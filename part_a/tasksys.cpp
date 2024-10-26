@@ -191,44 +191,25 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
 }
 
 TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads) : ITaskSystem(num_threads) {
-    this->workers.reserve(num_threads);
     this->num_threads = num_threads;
-    this->num_total_tasks = 0;
-    this->in_progress = 0;
-    this->task_id = 0;
-    this->done = false;
 
     for (int i = 0; i < num_threads; i++) {
         workers.emplace_back([this]() {
-	    std::unique_lock<std::mutex> lock(tasks_l);
-	    while (true) {
-                int id = -1;
-
+	        std::unique_lock<std::mutex> lock(tasks_l);
+	        while (!done) {
                 // Wait for tasks or termination signal
                 cv.wait(lock, [this] {
                     return task_id < num_total_tasks || done;
                 });
 
-                // Exit thread if we're done
-                if (done && task_id >= num_total_tasks) {
-                    return;
-                }
-
                 // If there is a task to process, grab its ID
-                if (task_id < num_total_tasks) {
-                    id = task_id++;
-                    in_progress++;
-                }
-
-                // Process the task outside the critical section
-                if (id != -1) {
-		            lock.unlock();
+                while (task_id < num_total_tasks) {
+                    int id = task_id++;
+                    lock.unlock();
                     runnable->runTask(id, num_total_tasks);
-
-                    // Update the task completion state
                     lock.lock();
-                    in_progress--;
-                    if (in_progress == 0 && task_id >= num_total_tasks) {
+                    tasks_done++;
+                    if (tasks_done == num_total_tasks) {
                         lock.unlock();
                         cv.notify_all();
                         lock.lock();
@@ -256,14 +237,13 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
         this->num_total_tasks = num_total_tasks;
         this->task_id = 0;
         this->runnable = runnable;
-        this->done = false;
-        this->in_progress = 0;
+        this->tasks_done = 0;
     }
     cv.notify_all(); // Wake up all threads to start processing tasks
 
     // Wait for all tasks to finish
     std::unique_lock<std::mutex> lock(tasks_l);
-    while (task_id < num_total_tasks || in_progress > 0) {
+    while (tasks_done < num_total_tasks) {
         cv.wait(lock); // Wait for tasks to be completed
     }
 
