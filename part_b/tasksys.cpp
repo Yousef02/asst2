@@ -127,14 +127,14 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int thread_count)
-    : ITaskSystem(thread_count),
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads)
+    : ITaskSystem(num_threads),
       stop_flag(false),
       total_tasks_in_program(0),
       finished_tasks_count(0),
       upcoming_task_id(0) {
     
-    for (int i = 0; i < thread_count; i++) {
+    for (int i = 0; i < num_threads; i++) {
         worker_thread_list.emplace_back(&TaskSystemParallelThreadPoolSleeping::workerThreadFunction, this);
     }
 }
@@ -146,30 +146,33 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     }
     task_ready_cv.notify_all(); // Notify all threads for shutdown
     
-    for (std::thread& worker : worker_thread_list) {
-        worker.join();
+    for (std::thread& worker_thread : worker_thread_list) {
+        worker_thread.join();
     }
 }
 
-void TaskSystemParallelThreadPoolSleeping::run(IRunnable* task, int task_count) {
-    runAsyncWithDeps(task, task_count, {});
+void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
+    runAsyncWithDeps(runnable, num_total_tasks, {});
     sync();  // Wait until all tasks are completed
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(
-    IRunnable* task, int task_count, const std::vector<TaskID>& task_dependencies) {
+    IRunnable* runnable, int num_total_tasks, const std::vector<TaskID>& deps) {
     
     std::unique_lock<std::mutex> lock(task_completion_lock);
 
-    total_tasks_in_program += task_count;  // Update total task count
+    total_tasks_in_program += num_total_tasks;  // Update total task count
     TaskID task_group_id = upcoming_task_id++;
 
-    task_batches[task_group_id] = BulkTask_toolbox{task, task_count, 0, 0, {}};
+    BulkTask_toolbox to_insert = {runnable, num_total_tasks, 0, 0, {}};
+    task_batches[task_group_id] = to_insert;
     BulkTask_toolbox& current_task_group = task_batches[task_group_id];
     
     // Check dependencies and adjust unresolved dependency count
-    for (TaskID dep : task_dependencies) {
+    for (long unsigned int i = 0; i < deps.size(); i++) {
+        TaskID dep = deps[i];
         auto dep_task_iter = task_batches.find(dep);
+
         if (dep_task_iter->second.finished_task_count < dep_task_iter->second.total_task_count 
                                                     && dep_task_iter != task_batches.end()) {
             dep_task_iter->second.dependent_task_ids.push_back(task_group_id);
@@ -238,6 +241,8 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadFunction() {
                 std::unique_lock<std::mutex> lock(task_completion_lock);
                 BulkTask_toolbox& parent_batch = task_batches[current_task.task_group_id];
 
+                // Update parent task group to check if all tasks are done
+                // If all tasks are done, notify dependent tasks
                 if (++parent_batch.finished_task_count == parent_batch.total_task_count) {
                     for (TaskID dependent_id : parent_batch.dependent_task_ids) {
                         BulkTask_toolbox& dependent_batch = task_batches[dependent_id];

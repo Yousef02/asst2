@@ -55,13 +55,6 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         void sync();
 };
 
-// struct Task {
-//     IRunnable* runnable;
-//     int task_id;
-//     TaskID bulk_id;
-//     int num_tasks_in_bulk;  // Total number of tasks in this bulk operation
-// };
-
 /*
  * TaskSystemParallelThreadPoolSleeping: This class is the student's
  * optimized implementation of a parallel task execution engine that uses
