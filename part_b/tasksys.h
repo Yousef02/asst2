@@ -1,22 +1,18 @@
 #ifndef _TASKSYS_H
 #define _TASKSYS_H
 
-#include <vector>
+#include "itasksys.h"
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <iostream>
+#include <queue>
+#include <unordered_map>
 #include <atomic>
-#include <chrono>
-#include <set>
-#include <deque>
-#include <atomic>
-#include "itasksys.h"
+#include <vector>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
- * serial task execution engine.  See definition of ITaskSystem in
- * itasksys.h for documentation of the ITaskSystem interface.
+ * serial task execution engine.
  */
 class TaskSystemSerial: public ITaskSystem {
     public:
@@ -31,9 +27,7 @@ class TaskSystemSerial: public ITaskSystem {
 
 /*
  * TaskSystemParallelSpawn: This class is the student's implementation of a
- * parallel task execution engine that spawns threads in every run()
- * call.  See definition of ITaskSystem in itasksys.h for documentation
- * of the ITaskSystem interface.
+ * parallel task execution engine that spawns threads in every run() call.
  */
 class TaskSystemParallelSpawn: public ITaskSystem {
     public:
@@ -48,9 +42,7 @@ class TaskSystemParallelSpawn: public ITaskSystem {
 
 /*
  * TaskSystemParallelThreadPoolSpinning: This class is the student's
- * implementation of a parallel task execution engine that uses a
- * thread pool. See definition of ITaskSystem in itasksys.h for
- * documentation of the ITaskSystem interface.
+ * implementation of a parallel task execution engine that uses a thread pool.
  */
 class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
     public:
@@ -63,13 +55,19 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         void sync();
 };
 
+// struct Task {
+//     IRunnable* runnable;
+//     int task_id;
+//     TaskID bulk_id;
+//     int num_tasks_in_bulk;  // Total number of tasks in this bulk operation
+// };
+
 /*
  * TaskSystemParallelThreadPoolSleeping: This class is the student's
  * optimized implementation of a parallel task execution engine that uses
- * a thread pool. See definition of ITaskSystem in
- * itasksys.h for documentation of the ITaskSystem interface.
+ * a thread pool.
  */
-class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
+class TaskSystemParallelThreadPoolSleeping : public ITaskSystem {
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();
@@ -80,65 +78,35 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         void sync();
 
     private:
-        std::vector<std::thread> workers;
-        std::mutex tasks_l;
-        std::condition_variable cv;
-        int num_threads;
-        int num_total_tasks;
-        int in_progress;
-        int task_id;
-        bool done;
-        IRunnable* runnable;
-        bool spin;
-
-        std::mutex dbg_l;
-
-        std::atomic<int> task_id_for_async;
-
-        // int bulk_in_progress = 0;
-        std::atomic<int> bulk_in_progress;
-
-        struct task_batch_toolbox {
-            TaskID task_id;
-            IRunnable* runnable;
-            int num_total_tasks;
-            int in_progress;
-            std::vector<TaskID> deps;
+        std::mutex task_queue_lock;
+        std::mutex task_completion_lock;
+        std::condition_variable task_ready_cv;
+        std::condition_variable all_tasks_done_cv;
+        
+        struct Task_toolbox {
+            IRunnable* runnable_task;
+            int task_index;
+            TaskID task_group_id;
+            int group_total_tasks;
         };
 
-        // need two queues to store tasks; one for tasks that are ready to run
-        // and one for tasks that are waiting for dependencies
+        struct BulkTask_toolbox {
+            IRunnable* runnable_task;
+            int total_task_count;
+            int finished_task_count;
+            int pending_dependencies;
+            std::vector<TaskID> dependent_task_ids;
+        };
+         std::vector<std::thread> worker_thread_list;
+        std::queue<Task_toolbox> ready_task_queue;
+        std::unordered_map<TaskID, BulkTask_toolbox> task_batches;
 
-        // task_id -> task
-        
-        // std::vector<task_batch_toolbox> ready_tasks;
-        std::deque<task_batch_toolbox> ready_tasks;
+        std::atomic<bool> stop_flag;
+        std::atomic<int> total_tasks_in_program;
+        std::atomic<int> finished_tasks_count;
+        TaskID upcoming_task_id;
 
-        // std::vector<task_batch_toolbox> waiting_tasks;
-        std::deque<task_batch_toolbox> waiting_tasks;
-
-        std::set<TaskID> done_set;
-
-        // need another cv to wait on ready_tasks being empty
-        std::condition_variable ready_cv;
-
-        // need a lock for the ready_tasks and waiting_tasks
-        std::mutex lists_l;
-
-        std::mutex bulk_worker_mutex;
-
-        bool bulk_worker_active = false;
-
-        TaskID task_id_for_bulk = 0;
-
-        // test case idea: throw an error if ready is done but waiting is not
-
-        // run is going to be just runAsync with no deps followed by a call to sync
-
-        // sync is basically a cv waiting on ready_list to be empty, then it migrates waiting_list to ready_list, then waits again on
-        // ready_list being empty, then returns.
-
-        // the populating of this->whatever variables is going to happen in the worker threads, and through the struct I made
+        void workerThreadFunction();
 };
 
 #endif

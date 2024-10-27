@@ -116,6 +116,7 @@ void TaskSystemParallelThreadPoolSpinning::sync() {
     return;
 }
 
+
 /*
  * ================================================================
  * Parallel Thread Pool Sleeping Task System Implementation
@@ -126,204 +127,138 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads) : ITaskSystem(num_threads) {
-    this->workers.reserve(num_threads);
-    this->num_threads = num_threads;
-    this->num_total_tasks = 0;
-    this->in_progress = 0;
-    this->task_id = 0;
-    this->done = false;
-    this->bulk_in_progress = 0;
-
-    for (int i = 0; i < num_threads; i++) {
-        workers.emplace_back([this]() {
-
-            // wait on cv before starting. return if something is in ready_tasks
-            {
-                std::unique_lock<std::mutex> lock(tasks_l);
-                ready_cv.wait(lock, [this] {
-                    return !ready_tasks.empty() || done;
-                });
-            }
-
-            while (true) {
-                bool move_on = false;
-                
-
-                // Ensure only one thread enters the bulk processing section
-                {
-                    std::lock_guard<std::mutex> bulk_lock(bulk_worker_mutex);
-                    if (bulk_in_progress == 0 && !bulk_worker_active) {
-                        bulk_worker_active = true;  // Mark that a thread is handling the bulk work
-                    } else {
-                        move_on = true;
-                    }
-                }
-                // std::cout << "HIIIIII" << std::endl;
-
-                while (bulk_in_progress == 0 && !move_on) {
-                    bulk_in_progress++;
-                    
-                    // std::cout << "bulk_in_progress == 0" << std::endl;
-                    std::unique_lock<std::mutex> lists_lock(lists_l);  // Ensure proper locking
-                    while (ready_tasks.empty() && waiting_tasks.empty()) {
-                        cv.wait(lists_lock, [this] {
-                            return !ready_tasks.empty() || !waiting_tasks.empty() || done;
-                        });
-                        if (done) {
-                            return;
-                        }
-                    }
-
-                    if (ready_tasks.empty() && !waiting_tasks.empty()) {
-                        task_batch_toolbox item = waiting_tasks.front();
-                        waiting_tasks.pop_front();
-                        ready_tasks.push_back(item);
-                    }
-
-                    // dbg_l.lock();
-                    task_batch_toolbox item = ready_tasks.front();
-                    ready_tasks.pop_front();
-                    // std::cout << " processing batch " << item.task_id << std::endl;
-                    // dbg_l.unlock();
-
-                    {
-                        std::unique_lock<std::mutex> lock(tasks_l);
-                        this->num_total_tasks = item.num_total_tasks;
-                        this->task_id = 0;
-                        this->runnable = item.runnable;  // Ensure runnable is assigned from item
-                        this->done = false;
-                        this->in_progress = 0;
-                        this->task_id_for_bulk = item.task_id;
-                    }
-
-                    
-                }
-                
-                {
-                    std::lock_guard<std::mutex> bulk_lock(bulk_worker_mutex);
-                    bulk_worker_active = false;  // Allow other threads to process after bulk work
-                }
-
-                int id = -1;
-                std::unique_lock<std::mutex> lock(tasks_l);
-
-                // Wait for tasks or termination signal
-                cv.wait(lock, [this] {
-                    return task_id < num_total_tasks || done;
-                });
-
-                // Exit thread if we're done
-                if (done && task_id >= num_total_tasks) {
-                    return;
-                }
-
-                // If there is a task to process, grab its ID
-                if (task_id < num_total_tasks) {
-                    id = task_id++;
-                    in_progress++;
-                }
-                lock.unlock();
-
-                // Process the task outside the critical section
-                if (id != -1) {
-                    // std::cout << "Thread " << std::this_thread::get_id() << " processing task " << id << std::endl;
-                    runnable->runTask(id, num_total_tasks);
-
-                    lock.lock();
-                    in_progress--;
-                    if (in_progress == 0 && task_id >= num_total_tasks) {
-                        
-                        bulk_in_progress--;
-                        // done_set.insert(task_id_for_bulk);
-                        cv.notify_all();
-                        ready_cv.notify_all();
-                    }
-                    // dbg_l.lock();
-                    // std::cout << "in_progress: " << in_progress << std::endl;
-                    // std::cout << "task_id: " << this->task_id << std::endl;
-                    // std::cout << "num_total_tasks: " << num_total_tasks << std::endl;
-                    // dbg_l.unlock();
-                    lock.unlock();
-                }
-            }
-        });
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int thread_count)
+    : ITaskSystem(thread_count),
+      stop_flag(false),
+      total_tasks_in_program(0),
+      finished_tasks_count(0),
+      upcoming_task_id(0) {
+    
+    for (int i = 0; i < thread_count; i++) {
+        worker_thread_list.emplace_back(&TaskSystemParallelThreadPoolSleeping::workerThreadFunction, this);
     }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
+    {
+        std::lock_guard<std::mutex> guard(task_queue_lock); 
+        stop_flag = true;
+    }
+    task_ready_cv.notify_all(); // Notify all threads for shutdown
     
-    
-    bulk_worker_mutex.lock();
-    done = true;
-    std::cout << "Calling sync one last time" << std::endl;
-    // sync();
-    bulk_worker_mutex.unlock();
-    cv.notify_all();
-
-    ready_cv.notify_all();
-
-
-    for (int i = 0; i < num_threads; i++) {
-        workers[i].join();
+    for (std::thread& worker : worker_thread_list) {
+        worker.join();
     }
 }
 
-void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-    runAsyncWithDeps(runnable, num_total_tasks, {});
-    sync();
+void TaskSystemParallelThreadPoolSleeping::run(IRunnable* task, int task_count) {
+    runAsyncWithDeps(task, task_count, {});
+    sync();  // Wait until all tasks are completed
 }
 
-TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
-                                                              const std::vector<TaskID>& deps) {
-    task_id_for_async++;
-    bool deps_satisfied = true;  // Default to true if no dependencies
+TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(
+    IRunnable* task, int task_count, const std::vector<TaskID>& task_dependencies) {
+    
+    std::unique_lock<std::mutex> lock(task_completion_lock);
 
-    for (const TaskID& dep : deps) {
-        if (done_set.find(dep) == done_set.end()) {
-            deps_satisfied = false;
-            break;
+    total_tasks_in_program += task_count;  // Update total task count
+    TaskID task_group_id = upcoming_task_id++;
+
+    task_batches[task_group_id] = BulkTask_toolbox{task, task_count, 0, 0, {}};
+    BulkTask_toolbox& current_task_group = task_batches[task_group_id];
+    
+    // Check dependencies and adjust unresolved dependency count
+    for (TaskID dep : task_dependencies) {
+        auto dep_task_iter = task_batches.find(dep);
+        if (dep_task_iter->second.finished_task_count < dep_task_iter->second.total_task_count 
+                                                    && dep_task_iter != task_batches.end()) {
+            dep_task_iter->second.dependent_task_ids.push_back(task_group_id);
+            current_task_group.pending_dependencies++;
         }
     }
 
-    if (deps.empty() || deps_satisfied) {
-        task_batch_toolbox toPush = {task_id_for_async, runnable, num_total_tasks, 0};
-        bool notify = ready_tasks.empty();
-
-        ready_tasks.push_back(toPush);
-        if (notify) {
-            ready_cv.notify_all();
+    if (current_task_group.pending_dependencies == 0) {
+        // No dependencies, add task to ready queue
+        {
+            std::lock_guard<std::mutex> guard(task_queue_lock); 
+            BulkTask_toolbox& task_batch = task_batches[task_group_id];
+            for (int i = 0; i < task_batch.total_task_count; ++i) {
+                ready_task_queue.push(Task_toolbox{task_batch.runnable_task, i, task_group_id, task_batch.total_task_count});
+            }
         }
-
-        return task_id_for_async;
+        task_ready_cv.notify_all();  // Notify workers about new tasks
     }
 
-    task_batch_toolbox to_add = {task_id_for_async, runnable, num_total_tasks, 0, deps};
-    waiting_tasks.push_back(to_add);
-    cv.notify_all();
-    return task_id_for_async;
+    return task_group_id;
 }
 
 void TaskSystemParallelThreadPoolSleeping::sync() {
-    std::cout << "syncing" << std::endl;
-    std::unique_lock<std::mutex> lock(lists_l);
-    while (!ready_tasks.empty()) {
-        ready_cv.wait(lock);
+    std::unique_lock<std::mutex> lock(task_completion_lock);
+    while (finished_tasks_count < total_tasks_in_program) {
+        all_tasks_done_cv.wait(lock);
     }
-
-std::cout << "sync done" << std::endl;
-
-    while (!waiting_tasks.empty()) {
-        task_batch_toolbox item = waiting_tasks.front();
-        waiting_tasks.pop_front();
-        ready_tasks.push_back(item);
-    }
-
-    while (!ready_tasks.empty()) {
-        ready_cv.wait(lock);
-    }
-
-    lock.unlock();
-    
+    // Only return when all tasks are done
 }
 
+// function passed to threads in the constructor
+// they will wait until there is a task to execute
+// and then execute it. after executing the task, they will
+// check if the task is part of a group of tasks and if all
+// tasks in the group are done, they will notify the dependent
+// tasks.
+void TaskSystemParallelThreadPoolSleeping::workerThreadFunction() {
+    while (true) {
+        Task_toolbox current_task;
+        bool task_available = false;
+
+        {
+            std::unique_lock<std::mutex> lock(task_queue_lock);
+            while (!stop_flag && ready_task_queue.empty()) {
+                task_ready_cv.wait(lock);  // Wait until tasks are available
+            }
+
+            if (stop_flag && ready_task_queue.empty()) {
+                return;  // Exit if shutdown and no tasks remain
+            }
+
+            if (!ready_task_queue.empty()) {
+                current_task = ready_task_queue.front();
+                ready_task_queue.pop();
+                task_available = true;
+            }
+        }
+
+        if (task_available) {
+            // Execute task
+            current_task.runnable_task->runTask(current_task.task_index, current_task.group_total_tasks);
+
+            int current_finished = finished_tasks_count.fetch_add(1);  // Update completion count
+
+            {
+                std::unique_lock<std::mutex> lock(task_completion_lock);
+                BulkTask_toolbox& parent_batch = task_batches[current_task.task_group_id];
+
+                if (++parent_batch.finished_task_count == parent_batch.total_task_count) {
+                    for (TaskID dependent_id : parent_batch.dependent_task_ids) {
+                        BulkTask_toolbox& dependent_batch = task_batches[dependent_id];
+                        if (--dependent_batch.pending_dependencies == 0) {
+                            {
+                                std::lock_guard<std::mutex> guard(task_queue_lock); 
+                                BulkTask_toolbox& task_batch = task_batches[dependent_id];
+                                for (int i = 0; i < task_batch.total_task_count; ++i) {
+                                    ready_task_queue.push(Task_toolbox{task_batch.runnable_task, i, dependent_id, task_batch.total_task_count});
+                                }
+                            }
+                            task_ready_cv.notify_all();  // Notify workers about new tasks  // Queue dependent tasks
+                        }
+                    }
+                }
+
+                int total_done = current_finished + 1;
+                if (total_done == total_tasks_in_program) { 
+                    all_tasks_done_cv.notify_all();  // Signal when all tasks are done
+                }
+            }
+        }
+    }
+}
