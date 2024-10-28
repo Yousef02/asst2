@@ -44,7 +44,6 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         std::mutex tasks_l;
         IRunnable *runnable;
         int num_total_tasks;
-
 };
 
 /*
@@ -85,11 +84,11 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();
         const char* name();
-        void doTasks();
         void run(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+
     private:
         std::vector<std::thread> workers;
         IRunnable *runnable;
@@ -97,10 +96,10 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         int num_total_tasks = 0;
         int num_threads;
         int task_id = 0;
-        int in_progress = 0;
-        std::condition_variable tasks_cv;
-        bool running = true;
-        std::condition_variable done;
+        int tasks_done = 0;
+        std::condition_variable cv;
+        bool done = false;
 };
 
 #endif
+

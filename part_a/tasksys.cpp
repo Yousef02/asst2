@@ -190,73 +190,65 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-/* 
- * This function ASSUMES that caller owns class lock (tasks_l).
- * Caller will still own lock when doTasks() returns.
- */
-void TaskSystemParallelThreadPoolSleeping::doTasks() {
-    while (task_id < num_total_tasks) {
-        int id = task_id++;
-        in_progress++;
-        tasks_l.unlock();
-        runnable->runTask(id, num_total_tasks);
-        tasks_l.lock();
-        in_progress--;
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads) : ITaskSystem(num_threads) {
+    this->num_threads = num_threads;
 
-        if ((in_progress == 0) && (task_id == num_total_tasks)) {
-            // All tasks done, notify main thread.
-            done.notify_one();
-        }
-    }
-}
-
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
-    this->num_threads = num_threads - 1;
-
-    for (int i=0; i<this->num_threads; i++) {
+    for (int i = 0; i < num_threads; i++) {
         workers.emplace_back([this]() {
-            std::unique_lock<std::mutex> lk(tasks_l);
-            while (running) {
-                // Sleep until tasks to come in.
-                while ((task_id == num_total_tasks) && running) {
-                    tasks_cv.wait(lk);
-                }
+	        std::unique_lock<std::mutex> lock(tasks_l);
+	        while (!done) {
+                // Wait for tasks or termination signal
+                cv.wait(lock, [this] {
+                    return task_id < num_total_tasks || done;
+                });
 
-                // Do tasks.
-                TaskSystemParallelThreadPoolSleeping::doTasks();
+                // If there is a task to process, grab its ID
+                while (task_id < num_total_tasks) {
+                    int id = task_id++;
+                    lock.unlock();
+                    runnable->runTask(id, num_total_tasks);
+                    lock.lock();
+                    tasks_done++;
+                    if (tasks_done == num_total_tasks) {
+                        lock.unlock();
+                        cv.notify_all();
+                        lock.lock();
+                    }
+                    
+                }
             }
         });
     }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    // Join worker threads.
-    tasks_l.lock();
-    this->running = false;
-    tasks_l.unlock();
-    tasks_cv.notify_all();
-    for (int i=0; i<num_threads; i++) {
+    std::unique_lock<std::mutex> lock(tasks_l);
+    done = true;
+    lock.unlock();
+    cv.notify_all();
+    for (int i = 0; i < num_threads; i++) {
         workers[i].join();
     }
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-    std::unique_lock<std::mutex> lk(tasks_l);
-    this->num_total_tasks = num_total_tasks;
-    this->task_id = 0;
-    this->runnable = runnable;
-    
-    // Notify worker threads of tasks to be done.
-    tasks_cv.notify_all();
-
-    // Use main thread as worker.
-    TaskSystemParallelThreadPoolSleeping::doTasks();
-
-    // Sleep until all tasks are done.
-    while (in_progress > 0) {
-        done.wait(lk);
+    {
+        std::unique_lock<std::mutex> lock(tasks_l);
+        this->num_total_tasks = num_total_tasks;
+        this->task_id = 0;
+        this->runnable = runnable;
+        this->tasks_done = 0;
     }
+    cv.notify_all(); // Wake up all threads to start processing tasks
+
+    // Wait for all tasks to finish
+    std::unique_lock<std::mutex> lock(tasks_l);
+    while (tasks_done < num_total_tasks) {
+        cv.wait(lock); // Wait for tasks to be completed
+    }
+
 }
+
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                                     const std::vector<TaskID>& deps) {
@@ -277,3 +269,4 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
 
     return;
 }
+
